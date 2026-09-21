@@ -74,7 +74,8 @@ function Get-VerifiedArchive {
     }
     if ($needsDownload) {
         Write-Host "Downloading $($Entry.url)"
-        Invoke-WebRequest -Uri $Entry.url -OutFile $destination -MaximumRetryCount 3 -RetryIntervalSec 3
+        # SourceForge serves an HTML interstitial to PowerShell's default user agent; the SHA-256 check below still gates the file.
+        Invoke-WebRequest -Uri $Entry.url -OutFile $destination -UserAgent 'curl/8.5.0' -MaximumRetryCount 3 -RetryIntervalSec 3
     }
 
     $actual = Get-FileSha256 -Path $destination
