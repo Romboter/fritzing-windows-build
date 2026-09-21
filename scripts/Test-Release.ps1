@@ -33,8 +33,13 @@ function Test-FritzingTree {
     $header = Get-AsciiFileHeader -Path $db -Length 16
     if ($header -ne "SQLite format 3`0") { throw 'Packaged parts.db is not SQLite.' }
 
-    $output = & $exe --version 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { throw "Fritzing --version failed: $output" }
+    # Fritzing.exe is a GUI-subsystem binary: wait for it and capture its output explicitly.
+    $outFile = [IO.Path]::GetTempFileName()
+    $errFile = [IO.Path]::GetTempFileName()
+    $versionProcess = Start-Process -FilePath $exe -ArgumentList '--version' -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    $output = (Get-Content -LiteralPath $outFile -Raw) + (Get-Content -LiteralPath $errFile -Raw)
+    Remove-Item -LiteralPath $outFile, $errFile -Force
+    if ($versionProcess.ExitCode -ne 0) { throw "Fritzing --version failed with exit code $($versionProcess.ExitCode): $output" }
     if ($output -notmatch [regex]::Escape($Version)) {
         throw "Fritzing version output did not contain $Version`: $output"
     }
