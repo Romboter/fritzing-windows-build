@@ -6,6 +6,24 @@ param(
 
 . "$PSScriptRoot/Common.ps1"
 
+function Get-MissingImports {
+    param([Parameter(Mandatory)] [string] $Root)
+
+    if (-not (Get-Command dumpbin -ErrorAction SilentlyContinue)) { return 'dumpbin is not available' }
+    $present = @{}
+    Get-ChildItem -LiteralPath $Root -Filter '*.dll' -File | ForEach-Object { $present[$_.Name.ToLowerInvariant()] = $true }
+    $system32 = Join-Path $env:WINDIR 'System32'
+    $missing = foreach ($file in Get-ChildItem -LiteralPath $Root -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' }) {
+        foreach ($line in (& dumpbin /nologo /dependents $file.FullName)) {
+            if ($line -notmatch '^\s+(\S+\.dll)\s*$') { continue }
+            $import = $Matches[1].ToLowerInvariant()
+            if ($import -like 'api-ms-win-*' -or $present[$import] -or (Test-Path -LiteralPath (Join-Path $system32 $import))) { continue }
+            "$($file.Name) -> $import"
+        }
+    }
+    return (($missing | Sort-Object -Unique) -join '; ')
+}
+
 function Test-FritzingTree {
     param([Parameter(Mandatory)] [string] $Root)
 
@@ -39,7 +57,9 @@ function Test-FritzingTree {
     $versionProcess = Start-Process -FilePath $exe -ArgumentList '--version' -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
     $output = (Get-Content -LiteralPath $outFile -Raw) + (Get-Content -LiteralPath $errFile -Raw)
     Remove-Item -LiteralPath $outFile, $errFile -Force
-    if ($versionProcess.ExitCode -ne 0) { throw "Fritzing --version failed with exit code $($versionProcess.ExitCode): $output" }
+    if ($versionProcess.ExitCode -ne 0) {
+        throw "Fritzing --version failed with exit code $($versionProcess.ExitCode): $output. Unresolved imports: $(Get-MissingImports -Root $Root)"
+    }
     if ($output -notmatch [regex]::Escape($Version)) {
         throw "Fritzing version output did not contain $Version`: $output"
     }
