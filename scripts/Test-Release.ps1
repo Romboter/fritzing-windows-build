@@ -1,0 +1,88 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)] [string] $DistDir,
+    [Parameter(Mandatory)] [string] $Version
+)
+
+. "$PSScriptRoot/Common.ps1"
+
+function Test-FritzingTree {
+    param([Parameter(Mandatory)] [string] $Root)
+
+    $exe = Join-Path $Root 'Fritzing.exe'
+    $parts = Join-Path $Root 'fritzing-parts'
+    $db = Join-Path $parts 'parts.db'
+    $buildInfoPath = Join-Path $Root 'BUILD-INFO.json'
+    foreach ($path in @($exe, (Join-Path $parts '.git/HEAD'), $db, $buildInfoPath, (Join-Path $Root 'ngspice.dll'), (Join-Path $Root 'ngspice/analog.cm'))) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Release tree is missing $path"
+        }
+    }
+
+    $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
+    $sha = (& git -C $parts rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $sha -ne $buildInfo.sources.fritzingParts.commit) {
+        throw 'Packaged parts Git repository is invalid.'
+    }
+    $branch = (& git -C $parts symbolic-ref --short HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $branch -ne $buildInfo.sources.fritzingParts.branch) {
+        throw "Packaged parts branch is invalid: $branch"
+    }
+    Invoke-External git -C $parts fsck --no-dangling
+
+    $header = Get-AsciiFileHeader -Path $db -Length 16
+    if ($header -ne "SQLite format 3`0") { throw 'Packaged parts.db is not SQLite.' }
+
+    $output = & $exe --version 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "Fritzing --version failed: $output" }
+    if ($output -notmatch [regex]::Escape($Version)) {
+        throw "Fritzing version output did not contain $Version`: $output"
+    }
+}
+
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('fritzing-release-test-' + [guid]::NewGuid().ToString('N'))
+$portableRoot = Join-Path $testRoot 'portable'
+$installRoot = Join-Path $testRoot 'installed'
+New-Item -ItemType Directory -Path $portableRoot, $installRoot -Force | Out-Null
+
+$originalPath = $env:PATH
+$originalQtPluginPath = $env:QT_PLUGIN_PATH
+$originalQtPlatformPluginPath = $env:QT_QPA_PLATFORM_PLUGIN_PATH
+$originalQmlImportPath = $env:QML2_IMPORT_PATH
+if ($env:QT_ROOT_DIR) {
+    $env:PATH = (($env:PATH -split [IO.Path]::PathSeparator) |
+        Where-Object { -not $_.StartsWith($env:QT_ROOT_DIR, [StringComparison]::OrdinalIgnoreCase) }) -join [IO.Path]::PathSeparator
+}
+$env:QT_PLUGIN_PATH = $null
+$env:QT_QPA_PLATFORM_PLUGIN_PATH = $null
+$env:QML2_IMPORT_PATH = $null
+
+try {
+    $portable = Join-Path $DistDir "Fritzing-$Version-Windows-x64-Portable.zip"
+    $installer = Join-Path $DistDir "Fritzing-$Version-Windows-x64-Setup.exe"
+    Expand-Archive -LiteralPath $portable -DestinationPath $portableRoot -Force
+    Test-FritzingTree -Root $portableRoot
+
+    $installProcess = Start-Process -FilePath $installer -ArgumentList @(
+        '/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOICONS', "/DIR=$installRoot"
+    ) -Wait -PassThru
+    if ($installProcess.ExitCode -ne 0) {
+        throw "Silent installer returned $($installProcess.ExitCode)"
+    }
+    Test-FritzingTree -Root $installRoot
+
+    $uninstaller = Get-ChildItem -LiteralPath $installRoot -Filter 'unins*.exe' -File | Select-Object -First 1
+    if (-not $uninstaller) { throw 'Installer did not create an uninstaller.' }
+    $uninstallProcess = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
+    if ($uninstallProcess.ExitCode -ne 0) {
+        throw "Silent uninstaller returned $($uninstallProcess.ExitCode)"
+    }
+} finally {
+    $env:PATH = $originalPath
+    $env:QT_PLUGIN_PATH = $originalQtPluginPath
+    $env:QT_QPA_PLATFORM_PLUGIN_PATH = $originalQtPlatformPluginPath
+    $env:QML2_IMPORT_PATH = $originalQmlImportPath
+    if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
+}
+
+Write-Host 'Portable archive and clean installer installation passed smoke tests.'

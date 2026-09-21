@@ -1,0 +1,221 @@
+name: Build Fritzing for Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_ref:
+        description: Fritzing app Git ref; blank uses the locked commit
+        required: false
+        type: string
+      parts_ref:
+        description: Fritzing parts Git ref; blank uses the locked commit
+        required: false
+        type: string
+      parts_branch:
+        description: Branch name for packaged parts; blank uses the locked branch
+        required: false
+        type: string
+      create_draft_release:
+        description: Create a draft GitHub Release after all tests pass
+        required: true
+        default: false
+        type: boolean
+      release_tag:
+        description: Required with draft release, for example v1.0.8-community.1
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: fritzing-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Validate release inputs
+        shell: pwsh
+        env:
+          CREATE_RELEASE: ${{ inputs.create_draft_release }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ($env:CREATE_RELEASE -eq 'true' -and $env:RELEASE_TAG -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$') {
+            throw 'release_tag is required and may contain only letters, numbers, dot, underscore, and hyphen.'
+          }
+
+  build:
+    name: Windows x64
+    needs: preflight
+    runs-on: windows-2022
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      artifact_name: fritzing-windows-x64-${{ steps.stage.outputs.fritzing_version }}
+      fritzing_version: ${{ steps.stage.outputs.fritzing_version }}
+
+    env:
+      LOCK_FILE: ${{ github.workspace }}\config\build-lock.json
+      WORK_ROOT: ${{ github.workspace }}\build-work
+      DEPS_ROOT: ${{ github.workspace }}\deps
+      DOWNLOADS_ROOT: ${{ github.workspace }}\downloads
+      STAGE_ROOT: ${{ github.workspace }}\artifacts\stage
+      DIST_ROOT: ${{ github.workspace }}\dist
+
+    steps:
+      - name: Check out builder
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Read locked toolchain
+        id: lock
+        shell: pwsh
+        run: |
+          $lock = Get-Content -LiteralPath $env:LOCK_FILE -Raw | ConvertFrom-Json
+          "qt_version=$($lock.toolchain.qtVersion)" >> $env:GITHUB_OUTPUT
+          "qt_arch=$($lock.toolchain.qtArch)" >> $env:GITHUB_OUTPUT
+          "aqt_version=$($lock.toolchain.aqtVersion)" >> $env:GITHUB_OUTPUT
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: amd64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: ${{ steps.lock.outputs.qt_version }}
+          host: windows
+          target: desktop
+          arch: ${{ steps.lock.outputs.qt_arch }}
+          modules: qtserialport qt5compat
+          aqtversion: ==${{ steps.lock.outputs.aqt_version }}
+          py7zrversion: ==1.1.0
+          cache: true
+          cache-key-prefix: fritzing-qt
+
+      - name: Restore compiled dependency cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            deps
+            downloads
+          key: fritzing-deps-${{ runner.os }}-${{ hashFiles('config/build-lock.json', 'scripts/Build-Dependencies.ps1') }}
+
+      - name: Check out exact upstream sources
+        id: sources
+        shell: pwsh
+        env:
+          REQUESTED_APP_REF: ${{ inputs.app_ref }}
+          REQUESTED_PARTS_REF: ${{ inputs.parts_ref }}
+        run: >-
+          ./scripts/Checkout-Sources.ps1
+          -LockFile $env:LOCK_FILE
+          -WorkRoot $env:WORK_ROOT
+          -AppRef $env:REQUESTED_APP_REF
+          -PartsRef $env:REQUESTED_PARTS_REF
+
+      - name: Build and verify dependencies
+        shell: pwsh
+        run: >-
+          ./scripts/Build-Dependencies.ps1
+          -LockFile $env:LOCK_FILE
+          -Workspace '${{ github.workspace }}'
+          -QtRoot $env:QT_ROOT_DIR
+
+      - name: Build Fritzing
+        id: compile
+        shell: pwsh
+        run: >-
+          ./scripts/Build-Fritzing.ps1
+          -AppPath '${{ steps.sources.outputs.app_path }}'
+          -DependencyRoot $env:DEPS_ROOT
+          -QtVersion '${{ steps.lock.outputs.qt_version }}'
+
+      - name: Stage runtime and generate parts database
+        id: stage
+        shell: pwsh
+        env:
+          REQUESTED_PARTS_BRANCH: ${{ inputs.parts_branch }}
+        run: >-
+          ./scripts/Stage-Release.ps1
+          -AppPath '${{ steps.sources.outputs.app_path }}'
+          -PartsPath '${{ steps.sources.outputs.parts_path }}'
+          -ReleaseDir '${{ steps.compile.outputs.release_dir }}'
+          -DependencyRoot $env:DEPS_ROOT
+          -StageDir $env:STAGE_ROOT
+          -LockFile $env:LOCK_FILE
+          -PartsBranch $env:REQUESTED_PARTS_BRANCH
+          -AppSha '${{ steps.sources.outputs.app_sha }}'
+          -PartsSha '${{ steps.sources.outputs.parts_sha }}'
+          -BuilderSha '${{ github.sha }}'
+
+      - name: Create portable, installer, source, and hashes
+        id: package
+        shell: pwsh
+        run: >-
+          ./scripts/New-ReleaseArtifacts.ps1
+          -StageDir '${{ steps.stage.outputs.stage_dir }}'
+          -AppPath '${{ steps.sources.outputs.app_path }}'
+          -DownloadsDir $env:DOWNLOADS_ROOT
+          -BuilderRoot '${{ github.workspace }}'
+          -DistDir $env:DIST_ROOT
+          -Version '${{ steps.stage.outputs.fritzing_version }}'
+
+      - name: Smoke-test portable package and installer
+        shell: pwsh
+        run: >-
+          ./scripts/Test-Release.ps1
+          -DistDir $env:DIST_ROOT
+          -Version '${{ steps.stage.outputs.fritzing_version }}'
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fritzing-windows-x64-${{ steps.stage.outputs.fritzing_version }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Attest final artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+  release:
+    name: Create draft release
+    if: ${{ inputs.create_draft_release }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: dist
+
+      - name: Create draft GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          FRITZING_VERSION: ${{ needs.build.outputs.fritzing_version }}
+        run: |
+          $assets = Get-ChildItem -LiteralPath dist -File | ForEach-Object FullName
+          gh release create $env:RELEASE_TAG @assets `
+            --draft `
+            --target '${{ github.sha }}' `
+            --title "Fritzing $env:FRITZING_VERSION Windows community build" `
+            --notes "Unmodified upstream Fritzing source. Verify SHA256SUMS.txt, BUILD-INFO.json, and the GitHub attestations before use."

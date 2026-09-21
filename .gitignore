@@ -1,0 +1,10 @@
+/artifacts/
+/build-work/
+/deps/
+/downloads/
+/dist/
+/.vs/
+*.log
+*.user
+
+/.claude/
