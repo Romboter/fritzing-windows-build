@@ -44,7 +44,7 @@ try {
     Remove-Item -LiteralPath '.qmake.cache', '.qmake.stash' -Force -ErrorAction SilentlyContinue
     Invoke-External lrelease phoenix.pro
     Invoke-External qmake phoenix.pro 'CONFIG+=release' 'QMAKE_TARGET.arch=x86_64' `
-        "LIBS+=-L$zlibBuild -lzlibstatic -lwinhttp -lrpcrt4 -lcrypt32 -lole32 -lsecur32 -lws2_32"
+        "LIBS+=-L$zlibBuild -lzlibstatic -ladvapi32 -lwinhttp -lrpcrt4 -lcrypt32 -lole32 -lsecur32 -lws2_32"
     Invoke-External nmake release
 } finally {
     Pop-Location
