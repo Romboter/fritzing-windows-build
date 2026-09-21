@@ -210,6 +210,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           FRITZING_VERSION: ${{ needs.build.outputs.fritzing_version }}
         run: |
