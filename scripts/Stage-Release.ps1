@@ -93,9 +93,10 @@ $env:QT_LOGGING_RULES = '*.debug=false'
 $stagedExe = Join-Path $stage 'Fritzing.exe'
 Push-Location $stage
 try {
-    & $stagedExe -f $stage -pp $partsDestination -db $dbPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "Fritzing parts database generation failed with exit code $LASTEXITCODE"
+    # Fritzing.exe is a GUI-subsystem binary; '&' would not wait for it to finish.
+    $dbProcess = Start-Process -FilePath $stagedExe -ArgumentList @('-f', $stage, '-pp', $partsDestination, '-db', $dbPath) -WorkingDirectory $stage -Wait -PassThru
+    if ($dbProcess.ExitCode -ne 0) {
+        throw "Fritzing parts database generation failed with exit code $($dbProcess.ExitCode)"
     }
 } finally {
     Pop-Location
