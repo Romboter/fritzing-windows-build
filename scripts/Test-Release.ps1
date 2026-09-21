@@ -33,7 +33,9 @@ function Test-FritzingTree {
     $buildInfoPath = Join-Path $Root 'BUILD-INFO.json'
     foreach ($path in @($exe, (Join-Path $parts '.git/HEAD'), $db, $buildInfoPath, (Join-Path $Root 'ngspice.dll'), (Join-Path $Root 'ngspice/analog.cm'))) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "Release tree is missing $path"
+            $rootNames = (Get-ChildItem -LiteralPath $Root -Force -ErrorAction SilentlyContinue).Name -join ', '
+            $partsNames = (Get-ChildItem -LiteralPath $parts -Force -ErrorAction SilentlyContinue).Name -join ', '
+            throw "Release tree is missing $path. Root has: $rootNames. fritzing-parts has: $partsNames"
         }
     }
 

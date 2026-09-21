@@ -43,6 +43,8 @@ Name: associatefiles; Description: "Associate .fzz and .fzpz files with Fritzing
 
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The parts folder is a Git repository (Fritzing updates it in place); include its hidden .git explicitly.
+Source: "{#StageDir}\fritzing-parts\.git\*"; DestDir: "{app}\fritzing-parts\.git"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Registry]
 Root: HKCU; Subkey: "Software\Classes\.fzz"; ValueType: string; ValueData: "FritzingCommunity.Project"; Flags: uninsdeletevalue; Tasks: associatefiles
