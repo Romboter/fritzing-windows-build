@@ -13,7 +13,7 @@
   },
   "toolchain": {
     "runner": "windows-2022",
-    "qtVersion": "6.5.3",
+    "qtVersion": "6.6.3",
     "qtArch": "win64_msvc2019_64",
     "aqtVersion": "3.3.0",
     "cmakeGenerator": "NMake Makefiles"
