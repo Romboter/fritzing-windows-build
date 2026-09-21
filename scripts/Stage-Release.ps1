@@ -55,6 +55,13 @@ $quazipRoot = Join-Path $DependencyRoot "quazip-$($lock.toolchain.qtVersion)-1.4
 $quazipDll = Get-ChildItem -LiteralPath $quazipRoot -Filter 'quazip1-qt6.dll' -File -Recurse | Select-Object -First 1
 if (-not $quazipDll) { throw 'QuaZip runtime DLL was not found.' }
 Copy-Item -LiteralPath $quazipDll.FullName -Destination $stage -Force
+# windeployqt only scans Fritzing.exe, so deploy the Qt modules QuaZip needs (Qt6Core5Compat) separately.
+Push-Location $stage
+try {
+    Invoke-External windeployqt --release --no-compiler-runtime --no-system-d3d-compiler $quazipDll.Name
+} finally {
+    Pop-Location
+}
 
 $ngRoot = Join-Path $DependencyRoot 'ngspice-42'
 Copy-Item -LiteralPath (Join-Path $ngRoot 'dll-vs/ngspice.dll') -Destination $stage -Force
